@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>事件分组测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #1890ff;
+            border-bottom: 2px solid #1890ff;
+            padding-bottom: 10px;
+        }
+        .session {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #e8e8e8;
+            border-radius: 4px;
+            background: #fafafa;
+        }
+        .session-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .session-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #1890ff;
+        }
+        .session-count {
+            background: #1890ff;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 12px;
+        }
+        .event {
+            margin: 10px 0;
+            padding: 10px;
+            border-left: 3px solid #1890ff;
+            background: white;
+        }
+        .event-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+        .event-type {
+            font-weight: bold;
+            color: #52c41a;
+        }
+        .event-timestamp {
+            color: #999;
+            font-size: 12px;
+        }
+        .event-source {
+            color: #666;
+            font-size: 14px;
+            margin: 5px 0;
+        }
+        .event-data {
+            background: #f5f5f5;
+            padding: 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            overflow-x: auto;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #999;
+        }
+        .error {
+            color: #ff4d4f;
+            padding: 10px;
+            background: #fff1f0;
+            border: 1px solid #ffa39e;
+            border-radius: 4px;
+        }
+        .refresh-btn {
+            background: #1890ff;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-bottom: 20px;
+        }
+        .refresh-btn:hover {
+            background: #40a9ff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>事件分组测试</h1>
+        <button class="refresh-btn" onclick="loadEvents()">刷新事件</button>
+        <div id="events-container"></div>
+    </div>
+
+    <script>
+        async function loadEvents() {
+            const container = document.getElementById('events-container');
+            container.innerHTML = '<div class="loading">加载中...</div>';
+
+            try {
+                const response = await fetch('http://localhost:8001/api/events?limit=50&grouped=true');
+                const data = await response.json();
+
+                console.log('API响应:', data);
+
+                if (data.grouped && data.events) {
+                    let html = `
+                        <div>
+                            <p>总事件数: ${data.total}</p>
+                            <p>会话数: ${data.session_count}</p>
+                            <p>是否分组: ${data.grouped ? '是' : '否'}</p>
+                        </div>
+                    `;
+
+                    data.events.forEach(session => {
+                        html += `
+                            <div class="session">
+                                <div class="session-header">
+                                    <div class="session-title">${session.session_name || session.session_id}</div>
+                                    <div class="session-count">${session.event_count} 个事件</div>
+                                </div>
+                                <div>
+                                    ${session.events.map(event => `
+                                        <div class="event">
+                                            <div class="event-header">
+                                                <div class="event-type">${event.type}</div>
+                                                <div class="event-timestamp">${formatTimestamp(event.timestamp)}</div>
+                                            </div>
+                                            <div class="event-source">来源: ${event.source}</div>
+                                            <div class="event-data">
+                                                <strong>数据:</strong><br>
+                                                ${JSON.stringify(event.data, null, 2)}
+                                            </div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        `;
+                    });
+
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<div class="error">数据格式不正确或未分组</div>';
+                }
+            } catch (error) {
+                console.error('加载事件失败:', error);
+                container.innerHTML = `<div class="error">加载失败: ${error.message}</div>`;
+            }
+        }
+
+        function formatTimestamp(timestamp) {
+            if (!timestamp) return 'Invalid Date';
+            try {
+                const date = new Date(timestamp);
+                return date.toLocaleString('zh-CN');
+            } catch (error) {
+                return 'Invalid Date';
+            }
+        }
+
+        // 页面加载时自动加载事件
+        window.onload = loadEvents;
+
+        // 每10秒自动刷新
+        setInterval(loadEvents, 10000);
+    </script>
+</body>
+</html>
