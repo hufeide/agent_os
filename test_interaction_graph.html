@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试Agent交互图API</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+        .test-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .success {
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+        }
+        .error {
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+        }
+        .info {
+            background-color: #d1ecf1;
+            border-color: #bee5eb;
+        }
+        pre {
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 3px;
+            overflow-x: auto;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+        }
+        .node {
+            display: inline-block;
+            padding: 10px;
+            margin: 5px;
+            border: 1px solid #333;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .node.main {
+            background-color: #e6f7ff;
+        }
+        .node.sub {
+            background-color: #f6ffed;
+        }
+        .node.task {
+            background-color: #fff7e6;
+        }
+    </style>
+</head>
+<body>
+    <h1>测试Agent交互图API</h1>
+    
+    <div class="test-section info">
+        <h2>测试说明</h2>
+        <p>这个页面用于测试Agent交互图API是否正常工作</p>
+        <p>前端地址: http://localhost:3050</p>
+        <p>后端API: http://localhost:8001</p>
+    </div>
+
+    <div class="test-section">
+        <h2>1. 测试任务列表API</h2>
+        <button onclick="testTasksAPI()">测试任务列表</button>
+        <div id="tasks-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>2. 创建测试任务</h2>
+        <button onclick="createTestTask()">创建测试任务</button>
+        <div id="create-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>3. 测试Agent交互图API</h2>
+        <input type="text" id="dag-id" placeholder="输入DAG ID" style="width: 300px; padding: 5px;">
+        <button onclick="testInteractionGraph()">测试交互图</button>
+        <div id="graph-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>4. 显示交互图</h2>
+        <div id="graph-display"></div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8001';
+
+        async function testTasksAPI() {
+            const resultDiv = document.getElementById('tasks-result');
+            resultDiv.innerHTML = '<p>正在测试...</p>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/tasks`);
+                const data = await response.json();
+                
+                resultDiv.innerHTML = `
+                    <div class="success">
+                        <h3>✓ 任务列表API正常</h3>
+                        <p>总任务数: ${data.total_count}</p>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    </div>
+                `;
+                
+                if (data.tasks && data.tasks.length > 0) {
+                    document.getElementById('dag-id').value = data.tasks[0].id;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <h3>✗ 任务列表API失败</h3>
+                        <p>${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        async function createTestTask() {
+            const resultDiv = document.getElementById('create-result');
+            resultDiv.innerHTML = '<p>正在创建任务...</p>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/tasks`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        description: '测试Agent交互图显示'
+                    })
+                });
+                
+                const data = await response.json();
+                
+                resultDiv.innerHTML = `
+                    <div class="success">
+                        <h3>✓ 任务创建成功</h3>
+                        <p>DAG ID: ${data.dag_id}</p>
+                        <p>会话ID: ${data.session_id}</p>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    </div>
+                `;
+                
+                document.getElementById('dag-id').value = data.dag_id;
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <h3>✗ 任务创建失败</h3>
+                        <p>${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        async function testInteractionGraph() {
+            const dagId = document.getElementById('dag-id').value;
+            const resultDiv = document.getElementById('graph-result');
+            const displayDiv = document.getElementById('graph-display');
+            
+            if (!dagId) {
+                resultDiv.innerHTML = '<p class="error">请输入DAG ID</p>';
+                return;
+            }
+            
+            resultDiv.innerHTML = '<p>正在获取交互图...</p>';
+            displayDiv.innerHTML = '';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/agent-interaction-graph/${dagId}`);
+                const data = await response.json();
+                
+                resultDiv.innerHTML = `
+                    <div class="success">
+                        <h3>✓ Agent交互图API正常</h3>
+                        <p>DAG名称: ${data.dag_name}</p>
+                        <p>节点数量: ${data.nodes.length}</p>
+                        <p>边数量: ${data.edges.length}</p>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    </div>
+                `;
+                
+                // 显示交互图
+                displayGraph(data);
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <h3>✗ Agent交互图API失败</h3>
+                        <p>${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        function displayGraph(data) {
+            const displayDiv = document.getElementById('graph-display');
+            
+            let html = '<h3>交互图可视化</h3>';
+            
+            // 显示统计信息
+            html += '<div style="margin-bottom: 20px;">';
+            html += '<strong>统计信息:</strong><br>';
+            html += `总Agent数: ${data.statistics.total_agents}<br>`;
+            html += `总任务数: ${data.statistics.total_tasks}<br>`;
+            html += `已完成: ${data.statistics.completed_tasks}<br>`;
+            html += `进行中: ${data.statistics.pending_tasks}<br>`;
+            html += `失败: ${data.statistics.failed_tasks}<br>`;
+            html += '</div>';
+            
+            // 显示节点
+            html += '<h4>节点:</h4>';
+            html += '<div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px;">';
+            
+            data.nodes.forEach(node => {
+                html += `
+                    <div class="node ${node.type}" onclick="alert('节点ID: ${node.id}\\n名称: ${node.name}\\n类型: ${node.type}\\n状态: ${node.status}')">
+                        <strong>${node.name}</strong><br>
+                        <small>类型: ${node.type}</small><br>
+                        <small>状态: ${node.status}</small>
+                    </div>
+                `;
+            });
+            
+            html += '</div>';
+            
+            // 显示边
+            html += '<h4>边:</h4>';
+            html += '<ul>';
+            data.edges.forEach(edge => {
+                html += `<li>${edge.from} -> ${edge.to} (${edge.label})</li>`;
+            });
+            html += '</ul>';
+            
+            displayDiv.innerHTML = html;
+        }
+
+        // 页面加载时自动测试任务列表
+        window.onload = function() {
+            testTasksAPI();
+        };
+    </script>
+</body>
+</html>

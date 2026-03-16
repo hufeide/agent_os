@@ -19,6 +19,9 @@ from core.event_bus import EventBus
 from core.blackboard import Blackboard
 from core.skill_registry import SkillRegistry
 from core.vector_memory import VectorMemoryService
+from core.agent_context_manager import AgentContextManager
+from core.tool_caller import ToolCaller
+from core.react_loop import ReActLoop
 
 
 class SubAgentWorker:
@@ -39,7 +42,8 @@ class SubAgentWorker:
         skill_registry: SkillRegistry,
         vector_memory: VectorMemoryService,
         llm_handler: Optional[Callable] = None,
-        scheduler: Optional[Any] = None
+        scheduler: Optional[Any] = None,
+        use_react: bool = True
     ):
         """
         初始化子Agent Worker
@@ -54,10 +58,12 @@ class SubAgentWorker:
             vector_memory: 向量记忆服务
             llm_handler: LLM处理函数
             scheduler: 任务调度器（可选）
+            use_react: 是否使用ReAct循环
         """
         self.agent_id = agent_id
         self.agent_role = agent_role
         self.capabilities = capabilities
+        self.use_react = use_react
         
         self.event_bus = event_bus
         self.blackboard = blackboard
@@ -80,6 +86,29 @@ class SubAgentWorker:
         self._running = False
         self._worker_thread: Optional[threading.Thread] = None
         self._task_queue: List[Task] = []
+        
+        if use_react:
+            self.context_manager = AgentContextManager(
+                agent_id=agent_id,
+                agent_role=agent_role,
+                capabilities=capabilities
+            )
+            
+            self.tool_caller = ToolCaller(skill_registry=skill_registry)
+            
+            self.react_loop = ReActLoop(
+                agent_id=agent_id,
+                agent_role=agent_role,
+                context_manager=self.context_manager,
+                tool_caller=self.tool_caller,
+                llm_handler=llm_handler
+            )
+            
+            print(f"[SubAgentWorker] 初始化ReAct模式: {agent_id}")
+        else:
+            self.context_manager = None
+            self.tool_caller = None
+            self.react_loop = None
         
         self._setup_event_subscriptions()
         self.blackboard.register_agent(self.agent)
@@ -263,6 +292,11 @@ class SubAgentWorker:
             
             self.blackboard.write_result(task.id, result, self.agent_id)
             
+            # 调用任务调度器的complete_task方法来更新任务状态
+            if self.scheduler:
+                self.scheduler.complete_task(task.id, result=result)
+                print(f"[SubAgent] Task completed via scheduler: {task.name} ({task.id})")
+            
         except Exception as e:
             error = str(e)
             print(f"Task execution error: {error}")
@@ -289,6 +323,11 @@ class SubAgentWorker:
                 event_data,
                 self.agent_id
             )
+            
+            # 调用任务调度器的complete_task方法来更新任务状态
+            if self.scheduler:
+                self.scheduler.complete_task(task.id, error=error)
+                print(f"[SubAgent] Task failed via scheduler: {task.name} ({task.id})")
         
         finally:
             with self._lock:
@@ -306,12 +345,79 @@ class SubAgentWorker:
         Returns:
             执行结果
         """
+        # 如果启用了ReAct模式，使用ReAct循环
+        if self.use_react and self.react_loop:
+            print(f"[ReAct模式] 使用ReAct循环执行任务: {task.name}")
+            return self._execute_with_react(task)
+        
+        # 否则使用原来的执行方式
         skill = self._select_skill(task)
         
         if skill:
             return self._execute_skill(skill, task)
         else:
             return self._execute_with_llm(task)
+    
+    def _execute_with_react(self, task: Task) -> Dict[str, Any]:
+        """
+        使用ReAct循环执行任务
+        
+        Args:
+            task: 任务对象
+            
+        Returns:
+            执行结果
+        """
+        task_dict = {
+            "name": task.name,
+            "description": task.description,
+            "payload": task.payload,
+            "id": task.id
+        }
+        
+        # 如果有前置任务的结果，添加到上下文管理器中
+        if task.payload and "dependency_results" in task.payload:
+            dependency_results = task.payload["dependency_results"]
+            if dependency_results:
+                print(f"[SubAgent] 任务 {task.name} 有 {len(dependency_results)} 个前置任务结果")
+                
+                # 将前置任务结果添加到工作记忆中
+                for dep_id, dep_info in dependency_results.items():
+                    dep_task_name = dep_info.get("task_name", "Unknown")
+                    dep_agent_role = dep_info.get("agent_role", "Unknown")
+                    dep_result = dep_info.get("result", {})
+                    
+                    # 格式化前置任务结果
+                    if isinstance(dep_result, dict):
+                        result_summary = str(dep_result)[:500]  # 限制长度
+                    else:
+                        result_summary = str(dep_result)[:500]
+                    
+                    # 添加到工作记忆
+                    self.context_manager.add_to_working_memory(
+                        f"前置任务结果 - {dep_agent_role}: {dep_task_name}\n"
+                        f"结果: {result_summary}"
+                    )
+        
+        try:
+            result = self.react_loop.run(task_dict)
+            
+            return {
+                "task_id": task.id,
+                "method": "react",
+                "result": result,
+                "completed_at": datetime.now().isoformat()
+            }
+        except Exception as e:
+            print(f"[ReAct执行] 错误: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "task_id": task.id,
+                "method": "react_error",
+                "error": str(e),
+                "completed_at": datetime.now().isoformat()
+            }
     
     def _select_skill(self, task: Task) -> Optional[Any]:
         """

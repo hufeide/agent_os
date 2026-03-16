@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试Agent交互图</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+        .test-section {
+            border: 1px solid #ddd;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #1890ff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #40a9ff;
+        }
+        .result {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #f5f5f5;
+            border-radius: 4px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .success {
+            background-color: #f6ffed;
+            border: 1px solid #b7eb8f;
+            color: #52c41a;
+        }
+        .error {
+            background-color: #fff2f0;
+            border: 1px solid #ffccc7;
+            color: #ff4d4f;
+        }
+        .info {
+            background-color: #e6f7ff;
+            border: 1px solid #91d5ff;
+            color: #1890ff;
+        }
+        .loading {
+            background-color: #fffbe6;
+            border: 1px solid #ffe58f;
+            color: #faad14;
+        }
+        h1 {
+            color: #1890ff;
+        }
+        h2 {
+            color: #333;
+            border-bottom: 2px solid #1890ff;
+            padding-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Agent交互图测试页面</h1>
+    
+    <div class="test-section">
+        <h2>1. 测试后端连接</h2>
+        <button onclick="testBackendConnection()">测试连接</button>
+        <div id="backend-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>2. 测试任务列表API</h2>
+        <button onclick="testTasksAPI()">测试任务列表</button>
+        <div id="tasks-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>3. 测试Agent交互图API</h2>
+        <button onclick="testInteractionGraph()">测试交互图</button>
+        <div id="graph-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>4. 完整流程测试</h2>
+        <button onclick="testFullFlow()">完整流程测试</button>
+        <div id="fullflow-result"></div>
+    </div>
+
+    <script>
+        const API_BASE = '/api';
+
+        async function testBackendConnection() {
+            const resultDiv = document.getElementById('backend-result');
+            resultDiv.innerHTML = '<div class="loading">正在测试后端连接...</div>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/tasks`);
+                const data = await response.json();
+                
+                resultDiv.innerHTML = `
+                    <div class="success">
+                        <h3>✓ 后端连接成功</h3>
+                        <p>状态码: ${response.status}</p>
+                        <p>返回数据: ${JSON.stringify(data, null, 2)}</p>
+                    </div>
+                `;
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <h3>✗ 后端连接失败</h3>
+                        <p>错误信息: ${error.message}</p>
+                        <p>请确保后端服务正在运行 (python start.py)</p>
+                    </div>
+                `;
+            }
+        }
+
+        async function testTasksAPI() {
+            const resultDiv = document.getElementById('tasks-result');
+            resultDiv.innerHTML = '<div class="loading">正在测试任务列表API...</div>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/tasks`);
+                const data = await response.json();
+                
+                resultDiv.innerHTML = `
+                    <div class="success">
+                        <h3>✓ 任务列表API正常</h3>
+                        <p>总任务数: ${data.total_count}</p>
+                        <p>任务列表: ${JSON.stringify(data.tasks, null, 2)}</p>
+                    </div>
+                `;
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <h3>✗ 任务列表API失败</h3>
+                        <p>错误信息: ${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        async function testInteractionGraph() {
+            const resultDiv = document.getElementById('graph-result');
+            resultDiv.innerHTML = '<div class="loading">正在测试交互图API...</div>';
+            
+            try {
+                // 先获取任务列表
+                const tasksResponse = await fetch(`${API_BASE}/tasks`);
+                const tasksData = await tasksResponse.json();
+                
+                if (tasksData.tasks && tasksData.tasks.length > 0) {
+                    const dagId = tasksData.tasks[0].dag_id;
+                    
+                    // 获取交互图
+                    const graphResponse = await fetch(`${API_BASE}/agent-interaction-graph/${dagId}`);
+                    const graphData = await graphResponse.json();
+                    
+                    resultDiv.innerHTML = `
+                        <div class="success">
+                            <h3>✓ Agent交互图API正常</h3>
+                            <p>DAG名称: ${graphData.dag_name}</p>
+                            <p>节点数量: ${graphData.nodes.length}</p>
+                            <p>边数量: ${graphData.edges.length}</p>
+                            <p>统计信息: ${JSON.stringify(graphData.statistics, null, 2)}</p>
+                            <details>
+                                <summary>查看完整数据</summary>
+                                <pre>${JSON.stringify(graphData, null, 2)}</pre>
+                            </details>
+                        </div>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `
+                        <div class="info">
+                            <h3>ℹ 没有任务</h3>
+                            <p>请先创建任务</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <h3>✗ Agent交互图API失败</h3>
+                        <p>错误信息: ${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        async function testFullFlow() {
+            const resultDiv = document.getElementById('fullflow-result');
+            resultDiv.innerHTML = '<div class="loading">正在执行完整流程测试...</div>';
+            
+            const steps = [];
+            
+            try {
+                // 步骤1: 测试后端连接
+                steps.push('步骤1: 测试后端连接...');
+                const backendResponse = await fetch(`${API_BASE}/tasks`);
+                if (!backendResponse.ok) throw new Error('后端连接失败');
+                steps.push('✓ 后端连接成功');
+                
+                // 步骤2: 获取任务列表
+                steps.push('步骤2: 获取任务列表...');
+                const tasksResponse = await fetch(`${API_BASE}/tasks`);
+                const tasksData = await tasksResponse.json();
+                steps.push(`✓ 获取到 ${tasksData.total_count} 个任务`);
+                
+                // 步骤3: 如果没有任务，创建一个
+                let dagId;
+                if (tasksData.tasks.length === 0) {
+                    steps.push('步骤3: 创建测试任务...');
+                    const createResponse = await fetch(`${API_BASE}/tasks`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ description: '测试Agent交互图' })
+                    });
+                    const createData = await createResponse.json();
+                    dagId = createData.dag_id;
+                    steps.push(`✓ 任务创建成功: ${dagId}`);
+                    
+                    // 等待任务开始
+                    steps.push('步骤4: 等待任务初始化...');
+                    await new Promise(resolve => setTimeout(resolve, 3000));
+                    steps.push('✓ 任务初始化完成');
+                } else {
+                    dagId = tasksData.tasks[0].dag_id;
+                    steps.push(`步骤3: 使用现有任务: ${dagId}`);
+                }
+                
+                // 步骤5: 获取交互图
+                steps.push('步骤5: 获取Agent交互图...');
+                const graphResponse = await fetch(`${API_BASE}/agent-interaction-graph/${dagId}`);
+                const graphData = await graphResponse.json();
+                steps.push(`✓ 获取交互图成功: ${graphData.nodes.length} 个节点, ${graphData.edges.length} 条边`);
+                
+                // 步骤6: 验证数据结构
+                steps.push('步骤6: 验证数据结构...');
+                const requiredKeys = ['dag_id', 'dag_name', 'nodes', 'edges', 'statistics'];
+                const missingKeys = requiredKeys.filter(key => !graphData.hasOwnProperty(key));
+                if (missingKeys.length > 0) {
+                    throw new Error(`缺少必要字段: ${missingKeys.join(', ')}`);
+                }
+                steps.push('✓ 数据结构验证通过');
+                
+                resultDiv.innerHTML = `
+                    <div class="success">
+                        <h3>✓ 完整流程测试通过</h3>
+                        <ol>
+                            ${steps.map(step => `<li>${step}</li>`).join('')}
+                        </ol>
+                        <details>
+                            <summary>查看交互图数据</summary>
+                            <pre>${JSON.stringify(graphData, null, 2)}</pre>
+                        </details>
+                    </div>
+                `;
+                
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <h3>✗ 完整流程测试失败</h3>
+                        <ol>
+                            ${steps.map(step => `<li>${step}</li>`).join('')}
+                            <li style="color: red;">✗ ${error.message}</li>
+                        </ol>
+                    </div>
+                `;
+            }
+        }
+
+        // 页面加载时自动测试
+        window.onload = function() {
+            console.log('页面加载完成，准备测试...');
+        };
+    </script>
+</body>
+</html>

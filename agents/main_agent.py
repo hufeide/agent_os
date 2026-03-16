@@ -106,33 +106,7 @@ class MainAgent:
                 if cleaned.endswith("```"):
                     cleaned = cleaned[:-3].strip()
         
-        # 查找JSON对象的开始和结束
-        json_start = -1
-        json_end = -1
-        
-        # 查找第一个 {
-        for i, char in enumerate(cleaned):
-            if char == '{':
-                json_start = i
-                break
-        
-        # 查找最后一个 }
-        if json_start != -1:
-            brace_count = 0
-            for i in range(json_start, len(cleaned)):
-                if cleaned[i] == '{':
-                    brace_count += 1
-                elif cleaned[i] == '}':
-                    brace_count -= 1
-                    if brace_count == 0:
-                        json_end = i + 1
-                        break
-        
-        # 如果找到完整的JSON对象
-        if json_start != -1 and json_end > json_start:
-            return cleaned[json_start:json_end]
-        
-        # 如果找不到JSON对象，尝试JSON数组
+        # 优先查找JSON数组（因为任务分解通常返回数组）
         array_start = -1
         array_end = -1
         
@@ -157,6 +131,32 @@ class MainAgent:
         # 如果找到完整的JSON数组
         if array_start != -1 and array_end > array_start:
             return cleaned[array_start:array_end]
+        
+        # 如果找不到JSON数组，尝试JSON对象
+        json_start = -1
+        json_end = -1
+        
+        # 查找第一个 {
+        for i, char in enumerate(cleaned):
+            if char == '{':
+                json_start = i
+                break
+        
+        # 查找最后一个 }
+        if json_start != -1:
+            brace_count = 0
+            for i in range(json_start, len(cleaned)):
+                if cleaned[i] == '{':
+                    brace_count += 1
+                elif cleaned[i] == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        json_end = i + 1
+                        break
+        
+        # 如果找到完整的JSON对象
+        if json_start != -1 and json_end > json_start:
+            return cleaned[json_start:json_end]
         
         return cleaned
     
@@ -213,6 +213,8 @@ class MainAgent:
         for i, subtask in enumerate(subtasks):
             if "dependencies" in subtask:
                 for dep_idx in subtask["dependencies"]:
+                    print(f"Setting dependency: task {i} depends on task {dep_idx}")
+                    print(f"  Task {i} ID: {task_map[i]}, Task {dep_idx} ID: {task_map[dep_idx]}")
                     self.scheduler.add_dependency(dag.id, task_map[i], task_map[dep_idx])
         
         with self._lock:
@@ -283,6 +285,8 @@ class MainAgent:
             for i, subtask in enumerate(subtasks):
                 if "dependencies" in subtask:
                     for dep_idx in subtask["dependencies"]:
+                        print(f"Setting dependency: task {i} depends on task {dep_idx}")
+                        print(f"  Task {i} ID: {task_map[i]}, Task {dep_idx} ID: {task_map[dep_idx]}")
                         self.scheduler.add_dependency(dag.id, task_map[i], task_map[dep_idx])
             
             with self._lock:
@@ -325,10 +329,45 @@ class MainAgent:
             子任务列表
         """
         prompt = f"""
-        请将以下任务分解为多个子任务：
+        请将以下任务分解为多个子任务，确保正确设置agent之间的依赖关系和执行顺序：
         
         任务描述: {task_description}
         上下文: {context}
+        
+        重要提示：
+        1. 不同agent角色的职责：
+           - researcher: 负责研究、收集信息、调研
+           - analyst: 负责分析数据、洞察发现
+           - writer: 负责写作、生成报告、总结
+           - developer: 负责开发、编程
+           - designer: 负责设计、UI/UX
+           - tester: 负责测试、质量保证
+           - manager: 负责管理、规划
+           - architect: 负责架构、系统设计
+        
+        2. agent之间的依赖关系和执行顺序：
+           - researcher必须先执行，收集基础信息
+           - analyst依赖researcher的结果，对收集的信息进行分析
+           - writer依赖analyst的结果，基于分析结果进行写作
+           - developer依赖architect的设计结果
+           - tester依赖developer的代码
+           - designer通常独立执行，但可能依赖researcher的用户研究
+        
+        3. dependencies字段说明：
+           - dependencies是一个数组，包含依赖的子任务索引（从0开始）
+           - 例如：dependencies: [0] 表示依赖第一个子任务
+           - 例如：dependencies: [0, 1] 表示依赖第一个和第二个子任务
+           - 如果没有依赖，可以省略dependencies字段或设置为空数组 []
+        
+        4. 执行顺序示例：
+           正确的顺序：
+           - 子任务0: researcher (收集信息) - 无依赖
+           - 子任务1: analyst (分析数据) - dependencies: [0]
+           - 子任务2: writer (写报告) - dependencies: [1]
+           
+           错误的顺序：
+           - 子任务0: writer (写报告) - 无依赖 ❌ (应该依赖analyst)
+           - 子任务1: researcher (收集信息) - 无依赖 ❌ (应该先执行)
         
         请直接返回JSON格式的子任务列表，不要添加任何其他文字说明。
         JSON必须包含以下结构：
@@ -339,7 +378,7 @@ class MainAgent:
               "description": "子任务描述",
               "priority": 1,
               "agent_role": "researcher",
-              "dependencies": [0],
+              "dependencies": [],
               "payload": {{}}
             }}
           ]
@@ -351,7 +390,8 @@ class MainAgent:
             "name": "子任务名称",
             "description": "子任务描述",
             "priority": 1,
-            "agent_role": "researcher"
+            "agent_role": "researcher",
+            "dependencies": []
           }}
         ]
         """
@@ -750,4 +790,216 @@ class MainAgent:
                 "agent_name": self.agent.name,
                 "active_dags": len(self._active_dags),
                 "dag_ids": list(self._active_dags.keys())
+            }
+    
+    def react_loop(self, task_description: str, context: Optional[Dict[str, Any]] = None, 
+                   max_iterations: int = 10) -> Dict[str, Any]:
+        """
+        ReAct循环 - 主Agent的核心决策机制
+        
+        支持串行和并行任务分配，收集结果并判断完成状态
+        
+        Args:
+            task_description: 任务描述
+            context: 上下文信息
+            max_iterations: 最大迭代次数
+            
+        Returns:
+            最终结果
+        """
+        print(f"[MainAgent ReAct] 开始ReAct循环，任务: {task_description}")
+        
+        iteration = 0
+        current_context = context or {}
+        all_results = []
+        
+        while iteration < max_iterations:
+            iteration += 1
+            print(f"[MainAgent ReAct] 迭代 {iteration}/{max_iterations}")
+            
+            # 1. 规划任务 - 使用LLM分解任务
+            dag_id = self.plan_task(task_description, current_context)
+            print(f"[MainAgent ReAct] 创建DAG: {dag_id}")
+            
+            # 等待所有任务完成
+            self._wait_for_dag_completion(dag_id, timeout=300)
+            
+            # 2. 收集结果
+            results = self._collect_dag_results(dag_id)
+            all_results.extend(results)
+            print(f"[MainAgent ReAct] 收集到 {len(results)} 个结果")
+            
+            # 3. 评估完成状态 - 使用LLM判断任务是否完成
+            completion_status = self._evaluate_completion(task_description, results, current_context)
+            print(f"[MainAgent ReAct] 完成状态: {completion_status}")
+            
+            if completion_status.get("is_complete", False):
+                print(f"[MainAgent ReAct] 任务完成，返回最终结果")
+                final_result = {
+                    "task_description": task_description,
+                    "iterations": iteration,
+                    "is_complete": True,
+                    "final_answer": completion_status.get("final_answer"),
+                    "all_results": all_results,
+                    "completed_at": datetime.now().isoformat()
+                }
+                
+                # 将最终结果写入黑板
+                self.blackboard.write_knowledge(
+                    f"final_result_{dag_id}",
+                    final_result,
+                    self.agent_id
+                )
+                
+                return final_result
+            else:
+                print(f"[MainAgent ReAct] 任务未完成，继续迭代")
+                # 更新上下文，包含之前的结果
+                current_context["previous_results"] = results
+                current_context["iteration"] = iteration
+                current_context["feedback"] = completion_status.get("feedback", "")
+                
+                # 根据反馈调整任务描述
+                if completion_status.get("next_tasks"):
+                    # 如果有明确的下一步任务，使用这些任务
+                    task_description = completion_status["next_tasks"]
+                else:
+                    # 否则使用反馈信息继续
+                    task_description = f"{task_description}\n\n反馈: {completion_status.get('feedback', '')}"
+        
+        # 达到最大迭代次数，返回当前结果
+        print(f"[MainAgent ReAct] 达到最大迭代次数 {max_iterations}，返回当前结果")
+        final_result = {
+            "task_description": task_description,
+            "iterations": iteration,
+            "is_complete": False,
+            "all_results": all_results,
+            "completed_at": datetime.now().isoformat(),
+            "status": "max_iterations_reached"
+        }
+        
+        return final_result
+    
+    def _wait_for_dag_completion(self, dag_id: str, timeout: int = 300) -> None:
+        """
+        等待DAG完成
+        
+        Args:
+            dag_id: DAG ID
+            timeout: 超时时间（秒）
+        """
+        import time
+        
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            dag = self.scheduler.get_dag(dag_id)
+            if dag and dag.is_completed():
+                print(f"[MainAgent ReAct] DAG {dag_id} 已完成")
+                return
+            
+            # 检查是否有任务失败
+            if dag:
+                failed_tasks = [t for t in dag.tasks.values() if t.status == TaskStatus.FAILED]
+                if failed_tasks:
+                    print(f"[MainAgent ReAct] DAG {dag_id} 中有任务失败")
+                    return
+            
+            time.sleep(2)
+        
+        print(f"[MainAgent ReAct] DAG {dag_id} 等待超时")
+    
+    def _collect_dag_results(self, dag_id: str) -> List[Dict[str, Any]]:
+        """
+        收集DAG中所有任务的结果
+        
+        Args:
+            dag_id: DAG ID
+            
+        Returns:
+            结果列表
+        """
+        dag = self.scheduler.get_dag(dag_id)
+        if not dag:
+            return []
+        
+        results = []
+        for task in dag.tasks.values():
+            if task.result:
+                results.append({
+                    "task_id": task.id,
+                    "task_name": task.name,
+                    "agent_role": task.agent_role,
+                    "result": task.result,
+                    "status": task.status.value if task.status else "unknown"
+                })
+        
+        return results
+    
+    def _evaluate_completion(self, task_description: str, results: List[Dict[str, Any]], 
+                           context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        评估任务是否完成
+        
+        使用LLM判断当前结果是否满足任务要求
+        
+        Args:
+            task_description: 任务描述
+            results: 当前结果
+            context: 上下文信息
+            
+        Returns:
+            完成状态字典
+        """
+        if not self.llm_handler:
+            # 如果没有LLM，简单判断是否有结果
+            return {
+                "is_complete": len(results) > 0,
+                "final_answer": results[0] if results else "No results",
+                "feedback": ""
+            }
+        
+        # 构建评估prompt
+        results_summary = "\n".join([
+            f"- {r['task_name']} ({r['agent_role']}): {str(r['result'])[:200]}"
+            for r in results
+        ])
+        
+        prompt = f"""请评估以下任务是否已经完成：
+
+原始任务: {task_description}
+
+当前获得的结果:
+{results_summary}
+
+请判断：
+1. 任务是否已经完成？（是/否）
+2. 如果完成了，请提供最终答案
+3. 如果未完成，请提供反馈和下一步建议
+
+请以JSON格式回复，格式如下：
+{{
+    "is_complete": true/false,
+    "final_answer": "如果完成，提供最终答案",
+    "feedback": "如果未完成，提供反馈",
+    "next_tasks": "如果需要更多任务，描述下一步任务"
+}}"""
+        
+        try:
+            response = self.llm_handler(prompt)
+            print(f"[MainAgent ReAct] LLM评估响应: {response[:500]}")
+            
+            # 解析LLM响应
+            import json
+            cleaned_response = self._clean_json_response(response)
+            evaluation = json.loads(cleaned_response)
+            
+            return evaluation
+        except Exception as e:
+            print(f"[MainAgent ReAct] 评估失败: {e}")
+            # 如果评估失败，默认认为未完成
+            return {
+                "is_complete": False,
+                "final_answer": "",
+                "feedback": f"评估失败: {str(e)}",
+                "next_tasks": ""
             }

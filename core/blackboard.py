@@ -142,6 +142,20 @@ class Blackboard:
         with self._lock:
             return self._results.get(task_id)
     
+    def get_task_result(self, task_id: str) -> Optional[Any]:
+        """
+        获取任务结果值
+        
+        Args:
+            task_id: 任务ID
+            
+        Returns:
+            结果值，如果不存在返回None
+        """
+        with self._lock:
+            result = self._results.get(task_id)
+            return result.value if result else None
+    
     def get_all_results(self) -> List[Result]:
         """
         获取所有结果

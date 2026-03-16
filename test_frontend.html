@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试前端页面</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+        .test-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .success {
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+        }
+        .error {
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+        }
+        .info {
+            background-color: #d1ecf1;
+            border-color: #bee5eb;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <h1>测试前端页面</h1>
+    
+    <div class="test-section info">
+        <h2>测试说明</h2>
+        <p>这个页面用于测试前端是否能正常访问</p>
+        <p>前端地址: <a href="http://localhost:3050" target="_blank">http://localhost:3050</a></p>
+        <p>后端API: <a href="http://localhost:8001" target="_blank">http://localhost:8001</a></p>
+    </div>
+
+    <div class="test-section">
+        <h2>1. 测试前端页面</h2>
+        <button onclick="testFrontend()">测试前端</button>
+        <div id="frontend-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>2. 测试API代理</h2>
+        <button onclick="testAPIProxy()">测试API代理</button>
+        <div id="proxy-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>3. 测试Agent交互图API</h2>
+        <button onclick="testInteractionGraph()">测试交互图</button>
+        <div id="graph-result"></div>
+    </div>
+
+    <script>
+        const FRONTEND_URL = 'http://localhost:3050';
+        const API_BASE = '/api';
+
+        async function testFrontend() {
+            const resultDiv = document.getElementById('frontend-result');
+            resultDiv.innerHTML = '<p>正在测试前端...</p>';
+            
+            try {
+                const response = await fetch(FRONTEND_URL);
+                const text = await response.text();
+                
+                if (text.includes('Agent OS Dashboard')) {
+                    resultDiv.innerHTML = `
+                        <div class="success">
+                            <h3>✓ 前端页面正常</h3>
+                            <p>可以访问前端页面</p>
+                        </div>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `
+                        <div class="error">
+                            <h3>✗ 前端页面异常</h3>
+                            <p>页面内容不正确</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <h3>✗ 前端页面失败</h3>
+                        <p>${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        async function testAPIProxy() {
+            const resultDiv = document.getElementById('proxy-result');
+            resultDiv.innerHTML = '<p>正在测试API代理...</p>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/tasks`);
+                const data = await response.json();
+                
+                resultDiv.innerHTML = `
+                    <div class="success">
+                        <h3>✓ API代理正常</h3>
+                        <p>总任务数: ${data.total_count}</p>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    </div>
+                `;
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <h3>✗ API代理失败</h3>
+                        <p>${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        async function testInteractionGraph() {
+            const resultDiv = document.getElementById('graph-result');
+            resultDiv.innerHTML = '<p>正在测试交互图...</p>';
+            
+            try {
+                // 先获取任务列表
+                const tasksResponse = await fetch(`${API_BASE}/tasks`);
+                const tasksData = await tasksResponse.json();
+                
+                if (tasksData.tasks && tasksData.tasks.length > 0) {
+                    const dagId = tasksData.tasks[0].id;
+                    
+                    // 获取交互图
+                    const graphResponse = await fetch(`${API_BASE}/agent-interaction-graph/${dagId}`);
+                    const graphData = await graphResponse.json();
+                    
+                    resultDiv.innerHTML = `
+                        <div class="success">
+                            <h3>✓ Agent交互图API正常</h3>
+                            <p>DAG名称: ${graphData.dag_name}</p>
+                            <p>节点数量: ${graphData.nodes.length}</p>
+                            <p>边数量: ${graphData.edges.length}</p>
+                            <pre>${JSON.stringify(graphData, null, 2)}</pre>
+                        </div>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `
+                        <div class="info">
+                            <h3>ℹ 没有任务</h3>
+                            <p>请先创建任务</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <h3>✗ Agent交互图API失败</h3>
+                        <p>${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        // 页面加载时自动测试
+        window.onload = function() {
+            testFrontend();
+        };
+    </script>
+</body>
+</html>

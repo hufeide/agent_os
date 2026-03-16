@@ -7,7 +7,8 @@ import {
   NodeIndexOutlined,
   ThunderboltOutlined,
   DatabaseOutlined,
-  SettingOutlined
+  SettingOutlined,
+  ShareAltOutlined
 } from '@ant-design/icons'
 import Dashboard from './pages/Dashboard'
 import Agents from './pages/Agents'
@@ -15,6 +16,7 @@ import Tasks from './pages/Tasks'
 import Events from './pages/Events'
 import Blackboard from './pages/Blackboard'
 import Skills from './pages/Skills'
+import AgentInteraction from './pages/AgentInteraction'
 
 const { Header, Content, Sider } = Layout
 
@@ -49,6 +51,11 @@ function App() {
       key: 'tasks',
       icon: <NodeIndexOutlined />,
       label: '任务管理'
+    },
+    {
+      key: 'agent-interaction',
+      icon: <ShareAltOutlined />,
+      label: 'Agent交互图'
     },
     {
       key: 'events',
@@ -120,6 +127,7 @@ function App() {
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/agents" element={<Agents />} />
               <Route path="/tasks" element={<Tasks />} />
+              <Route path="/agent-interaction" element={<AgentInteraction />} />
               <Route path="/events" element={<Events />} />
               <Route path="/blackboard" element={<Blackboard />} />
               <Route path="/skills" element={<Skills />} />

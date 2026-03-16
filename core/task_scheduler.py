@@ -200,12 +200,14 @@ class TaskDAGScheduler:
                     continue
                 
                 ready_tasks = dag.get_ready_tasks()
+                print(f"[TaskScheduler] DAG {dag_id}: found {len(ready_tasks)} ready tasks")
                 
                 for task in ready_tasks:
                     if len(self._running_tasks) >= self._max_concurrent_tasks:
                         break
                     
                     if task.id not in self._running_tasks:
+                        print(f"[TaskScheduler] Starting ready task: {task.name}")
                         self._start_task(dag_id, task)
     
     def _start_task(self, dag_id: str, task: Task) -> None:
@@ -218,6 +220,38 @@ class TaskDAGScheduler:
         """
         dag = self._dags[dag_id]
         dag.update_task_status(task.id, TaskStatus.RUNNING)
+        
+        print(f"[TaskScheduler] Starting task: {task.name} with {len(task.dependencies)} dependencies")
+        
+        # 将前置任务的结果添加到任务payload中
+        if task.dependencies and self.blackboard:
+            print(f"[TaskScheduler] Task has dependencies, checking for results...")
+            dependency_results = {}
+            for dep_id in task.dependencies:
+                if dep_id in dag.tasks:
+                    dep_task = dag.tasks[dep_id]
+                    print(f"[TaskScheduler] Checking dependency {dep_id}: {dep_task.name}, status: {dep_task.status}")
+                    if dep_task.status == TaskStatus.COMPLETED:
+                        # 从黑板获取前置任务的结果
+                        dep_result = self.blackboard.get_task_result(dep_id)
+                        print(f"[TaskScheduler] Got result for dependency {dep_id}: {bool(dep_result)}")
+                        if dep_result:
+                            dependency_results[dep_id] = {
+                                "task_name": dep_task.name,
+                                "agent_role": dep_task.agent_role,
+                                "result": dep_result
+                            }
+            
+            if dependency_results:
+                # 将前置任务结果添加到任务payload中
+                if not task.payload:
+                    task.payload = {}
+                task.payload["dependency_results"] = dependency_results
+                print(f"Task {task.name} has {len(dependency_results)} dependency results")
+            else:
+                print(f"[TaskScheduler] No dependency results found for task {task.name}")
+        else:
+            print(f"[TaskScheduler] Task has no dependencies or blackboard is None")
         
         self._running_tasks[task.id] = task
         
@@ -248,11 +282,14 @@ class TaskDAGScheduler:
             if task_id not in self._running_tasks:
                 return
             
-            task = self._running_tasks[task_id]
+            # 从_running_tasks中删除任务
             del self._running_tasks[task_id]
             
             for dag_id, dag in self._dags.items():
                 if task_id in dag.tasks:
+                    # 从DAG中获取任务对象，而不是从_running_tasks中获取
+                    task = dag.tasks[task_id]
+                    
                     if error:
                         dag.update_task_status(task_id, TaskStatus.FAILED, error=error)
                         
@@ -268,6 +305,11 @@ class TaskDAGScheduler:
                         )
                     else:
                         dag.update_task_status(task_id, TaskStatus.COMPLETED, result=result)
+                        
+                        # 将结果存储到黑板中，供依赖任务使用
+                        if self.blackboard and result:
+                            self.blackboard.write_result(task_id, result, task.agent_role or "scheduler")
+                            print(f"[TaskScheduler] Stored result for task {task_id} in blackboard")
                         
                         # 发布事件，包含session_id（如果有）
                         event_data = {"dag_id": dag_id, "task_id": task_id, "result": result}

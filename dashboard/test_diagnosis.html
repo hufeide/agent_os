@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent交互图诊断</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+        .test-section {
+            border: 1px solid #ddd;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #1890ff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #40a9ff;
+        }
+        .result {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #f5f5f5;
+            border-radius: 4px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .success {
+            background-color: #f6ffed;
+            border: 1px solid #b7eb8f;
+            color: #52c41a;
+        }
+        .error {
+            background-color: #fff2f0;
+            border: 1px solid #ffccc7;
+            color: #ff4d4f;
+        }
+        .info {
+            background-color: #e6f7ff;
+            border: 1px solid #91d5ff;
+            color: #1890ff;
+        }
+        .loading {
+            background-color: #fffbe6;
+            border: 1px solid #ffe58f;
+            color: #faad14;
+        }
+        h1 {
+            color: #1890ff;
+        }
+        h2 {
+            color: #333;
+            border-bottom: 2px solid #1890ff;
+            padding-bottom: 10px;
+        }
+        .node-card {
+            border: 1px solid #d9d9d9;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 5px;
+            display: inline-block;
+            min-width: 150px;
+            background-color: white;
+        }
+        .node-card:hover {
+            border-color: #1890ff;
+            cursor: pointer;
+        }
+        .node-main {
+            background-color: #e6f7ff;
+        }
+        .node-sub {
+            background-color: #f6ffed;
+        }
+        .node-task {
+            background-color: #fff7e6;
+        }
+    </style>
+</head>
+<body>
+    <h1>Agent交互图诊断工具</h1>
+    
+    <div class="test-section">
+        <h2>1. 测试后端连接</h2>
+        <button onclick="testBackendConnection()">测试连接</button>
+        <div id="backend-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>2. 获取任务列表</h2>
+        <button onclick="getTasks()">获取任务</button>
+        <div id="tasks-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>3. 获取交互图数据</h2>
+        <button onclick="getInteractionGraph()">获取交互图</button>
+        <div id="graph-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>4. 渲染交互图</h2>
+        <button onclick="renderGraph()">渲染图</button>
+        <div id="render-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>5. 完整测试</h2>
+        <button onclick="fullTest()">完整测试</button>
+        <div id="full-result"></div>
+    </div>
+
+    <script>
+        const API_BASE = '/api';
+        let currentDagId = null;
+        let graphData = null;
+
+        async function testBackendConnection() {
+            const resultDiv = document.getElementById('backend-result');
+            resultDiv.innerHTML = '<div class="loading">正在测试后端连接...</div>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/tasks`);
+                const data = await response.json();
+                
+                resultDiv.innerHTML = `
+                    <div class="success">
+                        <h3>✓ 后端连接成功</h3>
+                        <p>状态码: ${response.status}</p>
+                        <p>数据: ${JSON.stringify(data, null, 2)}</p>
+                    </div>
+                `;
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <h3>✗ 后端连接失败</h3>
+                        <p>错误: ${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        async function getTasks() {
+            const resultDiv = document.getElementById('tasks-result');
+            resultDiv.innerHTML = '<div class="loading">正在获取任务列表...</div>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/tasks`);
+                const data = await response.json();
+                
+                if (data.tasks && data.tasks.length > 0) {
+                    currentDagId = data.tasks[0].dag_id;
+                    resultDiv.innerHTML = `
+                        <div class="success">
+                            <h3>✓ 获取任务成功</h3>
+                            <p>总任务数: ${data.total_count}</p>
+                            <p>当前DAG ID: ${currentDagId}</p>
+                            <p>任务列表:</p>
+                            <pre>${JSON.stringify(data.tasks, null, 2)}</pre>
+                        </div>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `
+                        <div class="info">
+                            <h3>ℹ 没有任务</h3>
+                            <p>请先创建任务</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <h3>✗ 获取任务失败</h3>
+                        <p>错误: ${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        async function getInteractionGraph() {
+            const resultDiv = document.getElementById('graph-result');
+            
+            if (!currentDagId) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <h3>✗ 没有选择DAG</h3>
+                        <p>请先获取任务列表</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            resultDiv.innerHTML = '<div class="loading">正在获取交互图...</div>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/agent-interaction-graph/${currentDagId}`);
+                graphData = await response.json();
+                
+                resultDiv.innerHTML = `
+                    <div class="success">
+                        <h3>✓ 获取交互图成功</h3>
+                        <p>DAG名称: ${graphData.dag_name}</p>
+                        <p>节点数: ${graphData.nodes.length}</p>
+                        <p>边数: ${graphData.edges.length}</p>
+                        <p>统计: ${JSON.stringify(graphData.statistics, null, 2)}</p>
+                        <details>
+                            <summary>查看完整数据</summary>
+                            <pre>${JSON.stringify(graphData, null, 2)}</pre>
+                        </details>
+                    </div>
+                `;
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <h3>✗ 获取交互图失败</h3>
+                        <p>错误: ${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        function renderGraph() {
+            const resultDiv = document.getElementById('render-result');
+            
+            if (!graphData) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <h3>✗ 没有交互图数据</h3>
+                        <p>请先获取交互图</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            try {
+                let html = `
+                    <div class="success">
+                        <h3>✓ 渲染交互图</h3>
+                        <p>节点数: ${graphData.nodes.length}</p>
+                        <div style="display: flex; flex-wrap: wrap; justify-content: center; padding: 20px; background-color: #f5f5f5; border-radius: 8px;">
+                `;
+                
+                graphData.nodes.forEach(node => {
+                    const nodeClass = node.type === 'main' ? 'node-main' : 
+                                    node.type === 'sub' ? 'node-sub' : 'node-task';
+                    
+                    html += `
+                        <div class="node-card ${nodeClass}">
+                            <div style="font-weight: bold; font-size: 12px;">${node.name}</div>
+                            ${node.role ? `<div style="font-size: 10px; margin-top: 4px;">${node.role}</div>` : ''}
+                            <div style="margin-top: 4px;">
+                                <span style="font-size: 10px; padding: 2px 6px; background-color: #1890ff; color: white; border-radius: 2px;">
+                                    ${node.status}
+                                </span>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                html += `
+                        </div>
+                        <h4>依赖关系</h4>
+                        <div style="max-height: 300px; overflow-y: auto;">
+                `;
+                
+                graphData.edges.forEach((edge, index) => {
+                    const edgeColor = edge.type === 'dependency' ? 'orange' : 'green';
+                    html += `
+                        <div style="padding: 8px; border-bottom: 1px solid #f0f0f0;">
+                            <span style="color: #1890ff;">${edge.from}</span> → 
+                            <span style="color: ${edgeColor};">${edge.label}</span> → 
+                            <span style="color: #1890ff;">${edge.to}</span>
+                        </div>
+                    `;
+                });
+                
+                html += `
+                        </div>
+                    </div>
+                `;
+                
+                resultDiv.innerHTML = html;
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <h3>✗ 渲染失败</h3>
+                        <p>错误: ${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        async function fullTest() {
+            const resultDiv = document.getElementById('full-result');
+            resultDiv.innerHTML = '<div class="loading">正在执行完整测试...</div>';
+            
+            const steps = [];
+            
+            try {
+                steps.push('步骤1: 测试后端连接...');
+                const backendResponse = await fetch(`${API_BASE}/tasks`);
+                if (!backendResponse.ok) throw new Error('后端连接失败');
+                steps.push('✓ 后端连接成功');
+                
+                steps.push('步骤2: 获取任务列表...');
+                const tasksResponse = await fetch(`${API_BASE}/tasks`);
+                const tasksData = await tasksResponse.json();
+                steps.push(`✓ 获取到 ${tasksData.total_count} 个任务`);
+                
+                if (tasksData.tasks.length === 0) {
+                    steps.push('步骤3: 创建测试任务...');
+                    const createResponse = await fetch(`${API_BASE}/tasks`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ description: '测试Agent交互图' })
+                    });
+                    const createData = await createResponse.json();
+                    currentDagId = createData.dag_id;
+                    steps.push(`✓ 任务创建成功: ${currentDagId}`);
+                    steps.push('步骤4: 等待任务初始化...');
+                    await new Promise(resolve => setTimeout(resolve, 3000));
+                    steps.push('✓ 任务初始化完成');
+                } else {
+                    currentDagId = tasksData.tasks[0].dag_id;
+                    steps.push(`步骤3: 使用现有任务: ${currentDagId}`);
+                }
+                
+                steps.push('步骤5: 获取交互图...');
+                const graphResponse = await fetch(`${API_BASE}/agent-interaction-graph/${currentDagId}`);
+                graphData = await graphResponse.json();
+                steps.push(`✓ 获取交互图成功: ${graphData.nodes.length} 个节点, ${graphData.edges.length} 条边`);
+                
+                steps.push('步骤6: 验证数据结构...');
+                const requiredKeys = ['dag_id', 'dag_name', 'nodes', 'edges', 'statistics'];
+                const missingKeys = requiredKeys.filter(key => !graphData.hasOwnProperty(key));
+                if (missingKeys.length > 0) {
+                    throw new Error(`缺少必要字段: ${missingKeys.join(', ')}`);
+                }
+                steps.push('✓ 数据结构验证通过');
+                
+                steps.push('步骤7: 渲染交互图...');
+                const requiredNodeKeys = ['id', 'name', 'type', 'status'];
+                const invalidNodes = graphData.nodes.filter(node => 
+                    requiredNodeKeys.some(key => !node.hasOwnProperty(key))
+                );
+                if (invalidNodes.length > 0) {
+                    throw new Error(`节点缺少必要字段: ${invalidNodes.map(n => n.id).join(', ')}`);
+                }
+                steps.push('✓ 节点数据验证通过');
+                
+                resultDiv.innerHTML = `
+                    <div class="success">
+                        <h3>✓ 完整测试通过</h3>
+                        <ol>
+                            ${steps.map(step => `<li>${step}</li>`).join('')}
+                        </ol>
+                        <div style="display: flex; flex-wrap: wrap; justify-content: center; padding: 20px; background-color: #f5f5f5; border-radius: 8px; margin-top: 20px;">
+                            ${graphData.nodes.map(node => {
+                                const nodeClass = node.type === 'main' ? 'node-main' : 
+                                                node.type === 'sub' ? 'node-sub' : 'node-task';
+                                return `
+                                    <div class="node-card ${nodeClass}">
+                                        <div style="font-weight: bold; font-size: 12px;">${node.name}</div>
+                                        ${node.role ? `<div style="font-size: 10px; margin-top: 4px;">${node.role}</div>` : ''}
+                                        <div style="margin-top: 4px;">
+                                            <span style="font-size: 10px; padding: 2px 6px; background-color: #1890ff; color: white; border-radius: 2px;">
+                                                ${node.status}
+                                            </span>
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                `;
+                
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        <h3>✗ 测试失败</h3>
+                        <ol>
+                            ${steps.map(step => `<li>${step}</li>`).join('')}
+                            <li style="color: red;">✗ ${error.message}</li>
+                        </ol>
+                    </div>
+                `;
+            }
+        }
+    </script>
+</body>
+</html>

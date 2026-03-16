@@ -156,16 +156,22 @@ class DAG:
         """
         ready_tasks = []
         
+        print(f"[DAG] Checking ready tasks in DAG {self.name}")
+        print(f"[DAG] Total tasks: {len(self.tasks)}")
+        
         for task_id, task in self.tasks.items():
+            print(f"[DAG] Task {task.name} (ID: {task_id}): status={task.status}, deps={len(task.dependencies)}")
             if task.status == TaskStatus.PENDING:
                 all_deps_completed = all(
                     self.tasks[dep_id].status == TaskStatus.COMPLETED
                     for dep_id in task.dependencies
                     if dep_id in self.tasks
                 )
+                print(f"[DAG] Task {task.name}: all_deps_completed={all_deps_completed}")
                 if all_deps_completed:
                     ready_tasks.append(task)
         
+        print(f"[DAG] Ready tasks count: {len(ready_tasks)}")
         return ready_tasks
     
     def get_task(self, task_id: str) -> Optional[Task]:
@@ -193,9 +199,11 @@ class DAG:
             error: 错误信息
         """
         if task_id not in self.tasks:
+            print(f"[DAG] update_task_status: Task {task_id} not found in DAG")
             return
         
         task = self.tasks[task_id]
+        print(f"[DAG] update_task_status: Task {task.name} ({task_id}): {task.status} -> {status}")
         task.status = status
         
         if status == TaskStatus.RUNNING:

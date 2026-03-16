@@ -64,13 +64,15 @@ class DynamicAgentManager:
             "architect": ["architecture", "system_design"]
         }
     
-    def create_agent(self, agent_role: str, agent_id: Optional[str] = None) -> SubAgentWorker:
+    def create_agent(self, agent_role: str, agent_id: Optional[str] = None, 
+                   use_react: bool = True) -> SubAgentWorker:
         """
         创建指定角色的Agent
         
         Args:
             agent_role: Agent角色
             agent_id: Agent ID（可选，自动生成）
+            use_react: 是否使用ReAct模式
             
         Returns:
             创建的Agent
@@ -91,7 +93,8 @@ class DynamicAgentManager:
             skill_registry=self.skill_registry,
             vector_memory=self.vector_memory,
             llm_handler=self.llm_handler,
-            scheduler=self.scheduler
+            scheduler=self.scheduler,
+            use_react=use_react
         )
         
         # 启动Agent
@@ -100,16 +103,22 @@ class DynamicAgentManager:
         with self._lock:
             self._agents[agent_id] = agent
         
-        print(f"[动态Agent] 创建新Agent: {agent_id} (角色: {agent_role}, 能力: {capabilities})")
+        print(f"[动态Agent] 创建新Agent: {agent_id} (角色: {agent_role}, 能力: {capabilities}, ReAct: {use_react})")
+        
+        # 如果启用了ReAct，Agent会自动创建MD文件
+        if use_react and hasattr(agent, 'context_manager'):
+            md_file_path = agent.context_manager.get_md_file_path()
+            print(f"[动态Agent] Agent上下文文件: {md_file_path}")
         
         return agent
     
-    def get_or_create_agent(self, agent_role: str) -> SubAgentWorker:
+    def get_or_create_agent(self, agent_role: str, use_react: bool = True) -> SubAgentWorker:
         """
         获取或创建指定角色的Agent
         
         Args:
             agent_role: Agent角色
+            use_react: 是否使用ReAct模式
             
         Returns:
             Agent对象
@@ -121,7 +130,7 @@ class DynamicAgentManager:
                     return agent
             
             # 如果没有找到，创建新的
-            return self.create_agent(agent_role)
+            return self.create_agent(agent_role, use_react=use_react)
     
     def get_agent_by_id(self, agent_id: str) -> Optional[SubAgentWorker]:
         """

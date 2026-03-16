@@ -182,6 +182,109 @@ async def create_task(request: TaskRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class ReactTaskRequest(BaseModel):
+    """ReAct任务请求模型"""
+    description: str
+    context: Optional[Dict[str, Any]] = None
+    session_id: Optional[str] = None
+    max_iterations: Optional[int] = 10
+
+
+class ReactTaskResponse(BaseModel):
+    """ReAct任务响应模型"""
+    task_id: Optional[str]
+    session_id: str
+    status: str
+    message: str
+
+
+@app.post("/api/tasks/react", response_model=ReactTaskResponse)
+async def create_react_task(request: ReactTaskRequest):
+    """
+    创建ReAct任务（主Agent的ReAct循环）
+    
+    支持串行和并行任务分配，收集结果并判断完成状态
+    
+    Args:
+        request: ReAct任务请求
+        
+    Returns:
+        ReAct任务响应
+    """
+    try:
+        main_agent = app.state.main_agent
+        
+        # 生成或使用提供的session_id
+        import uuid
+        session_id = request.session_id or str(uuid.uuid4())
+        task_id = str(uuid.uuid4())
+        
+        # 在后台异步执行ReAct循环
+        import asyncio
+        
+        async def execute_react_loop():
+            try:
+                # 添加上下文信息
+                context = request.context or {}
+                context["session_id"] = session_id
+                context["task_id"] = task_id
+                
+                # 执行ReAct循环
+                result = main_agent.react_loop(
+                    task_description=request.description,
+                    context=context,
+                    max_iterations=request.max_iterations or 10
+                )
+                
+                # 将结果存储到黑板，使用task_id作为key
+                blackboard = app.state.blackboard
+                blackboard.write_knowledge(
+                    f"react_result_{task_id}",
+                    result,
+                    "main_agent"
+                )
+                
+                # 发布完成事件
+                main_agent.event_bus.publish(
+                    EventType.TASK_COMPLETED,
+                    {
+                        "task_id": task_id,
+                        "session_id": session_id,
+                        "result": result
+                    },
+                    "main_agent"
+                )
+                
+                print(f"[ReAct API] 任务完成: {task_id}")
+            except Exception as e:
+                print(f"[ReAct API] 任务执行失败: {e}")
+                import traceback
+                traceback.print_exc()
+                
+                # 发布失败事件
+                main_agent.event_bus.publish(
+                    EventType.TASK_FAILED,
+                    {
+                        "task_id": task_id,
+                        "session_id": session_id,
+                        "error": str(e)
+                    },
+                    "main_agent"
+                )
+        
+        # 创建后台任务
+        asyncio.create_task(execute_react_loop())
+        
+        return ReactTaskResponse(
+            task_id=task_id,
+            session_id=session_id,
+            status="created",
+            message=f"ReAct task created and is being executed"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/tasks/{dag_id}", response_model=DAGStatusResponse)
 async def get_task_status(dag_id: str):
     """
@@ -279,20 +382,31 @@ def format_task_result(result: Dict[str, Any]) -> Dict[str, Any]:
     
     # 根据执行方法提取摘要
     result_data = result.get("result", {})
+    
     if isinstance(result_data, dict):
+        # 处理steps字段 - 可能是整数（步骤数）或列表（步骤详情）
         if "steps" in result_data:
-            formatted["steps"] = result_data["steps"]
-            formatted["step_count"] = len(result_data["steps"])
+            steps_value = result_data["steps"]
+            formatted["steps"] = steps_value
+            if isinstance(steps_value, list):
+                formatted["step_count"] = len(steps_value)
+            elif isinstance(steps_value, int):
+                formatted["step_count"] = steps_value
+            else:
+                formatted["step_count"] = 0
         
         if "output" in result_data:
             output = result_data["output"]
             formatted["output"] = output
-            formatted["summary"] = str(output)[:200] + "..." if len(str(output)) > 200 else str(output)
+            output_str = str(output) if not isinstance(output, str) else output
+            formatted["summary"] = output_str[:200] + "..." if len(output_str) > 200 else output_str
         
         if "findings" in result_data:
-            formatted["findings"] = result_data["findings"]
+            findings = result_data["findings"]
+            formatted["findings"] = findings
             if not formatted["summary"]:
-                formatted["summary"] = str(result_data["findings"])[:200] + "..." if len(str(result_data["findings"])) > 200 else str(result_data["findings"])
+                findings_str = str(findings) if not isinstance(findings, str) else findings
+                formatted["summary"] = findings_str[:200] + "..." if len(findings_str) > 200 else findings_str
         
         if "metrics" in result_data:
             formatted["metrics"] = result_data["metrics"]
@@ -305,17 +419,34 @@ def format_task_result(result: Dict[str, Any]) -> Dict[str, Any]:
             formatted["original_question"] = research.get("original_question")  # 原始问题
             formatted["answer_to_original_question"] = research.get("answer_to_original_question")  # 直接回答原始问题
             formatted["findings"] = research.get("findings")
-            formatted["key_points"] = research.get("key_points", [])
-            formatted["data_sources"] = research.get("data_sources", [])
-            formatted["data_points"] = research.get("data_points")
+            key_points = research.get("key_points")
+            if key_points is not None:
+                formatted["key_points"] = key_points
+            data_sources = research.get("data_sources")
+            if data_sources is not None:
+                formatted["data_sources"] = data_sources
+            data_points = research.get("data_points")
+            if data_points is not None:
+                formatted["data_points"] = data_points
             formatted["confidence"] = research.get("confidence")
-            formatted["steps"] = research.get("steps", [])
-            formatted["step_count"] = len(research.get("steps", []))
+            steps = research.get("steps")
+            if steps is not None:
+                formatted["steps"] = steps
+                if isinstance(steps, list):
+                    formatted["step_count"] = len(steps)
+                elif isinstance(steps, int):
+                    formatted["step_count"] = steps
+                else:
+                    formatted["step_count"] = 0
             # 优先使用answer_to_original_question作为摘要
             if research.get("answer_to_original_question"):
-                formatted["summary"] = research["answer_to_original_question"][:200] + "..." if len(research["answer_to_original_question"]) > 200 else research["answer_to_original_question"]
+                answer_value = research["answer_to_original_question"]
+                answer_str = str(answer_value) if not isinstance(answer_value, str) else answer_value
+                formatted["summary"] = answer_str[:200] + "..." if len(answer_str) > 200 else answer_str
             elif not formatted["summary"]:
-                formatted["summary"] = research.get("findings", "")[:200] + "..." if len(research.get("findings", "")) > 200 else research.get("findings", "")
+                findings_value = research.get("findings", "")
+                findings_str = str(findings_value) if not isinstance(findings_value, str) else findings_value
+                formatted["summary"] = findings_str[:200] + "..." if len(findings_str) > 200 else findings_str
         
         elif "analysis_result" in result_data:
             analysis = result_data["analysis_result"]
@@ -324,16 +455,33 @@ def format_task_result(result: Dict[str, Any]) -> Dict[str, Any]:
             formatted["original_question"] = analysis.get("original_question")  # 原始问题
             formatted["answer_to_original_question"] = analysis.get("answer_to_original_question")  # 直接回答原始问题
             formatted["insights"] = analysis.get("insights")
-            formatted["key_findings"] = analysis.get("key_findings", [])
-            formatted["trends"] = analysis.get("trends", [])
-            formatted["metrics"] = analysis.get("metrics", {})
-            formatted["steps"] = analysis.get("steps", [])
-            formatted["step_count"] = len(analysis.get("steps", []))
+            key_findings = analysis.get("key_findings")
+            if key_findings is not None:
+                formatted["key_findings"] = key_findings
+            trends = analysis.get("trends")
+            if trends is not None:
+                formatted["trends"] = trends
+            metrics = analysis.get("metrics")
+            if metrics is not None:
+                formatted["metrics"] = metrics
+            steps = analysis.get("steps")
+            if steps is not None:
+                formatted["steps"] = steps
+                if isinstance(steps, list):
+                    formatted["step_count"] = len(steps)
+                elif isinstance(steps, int):
+                    formatted["step_count"] = steps
+                else:
+                    formatted["step_count"] = 0
             # 优先使用answer_to_original_question作为摘要
             if analysis.get("answer_to_original_question"):
-                formatted["summary"] = analysis["answer_to_original_question"][:200] + "..." if len(analysis["answer_to_original_question"]) > 200 else analysis["answer_to_original_question"]
+                answer_value = analysis["answer_to_original_question"]
+                answer_str = str(answer_value) if not isinstance(answer_value, str) else answer_value
+                formatted["summary"] = answer_str[:200] + "..." if len(answer_str) > 200 else answer_str
             elif not formatted["summary"]:
-                formatted["summary"] = analysis.get("insights", "")[:200] + "..." if len(analysis.get("insights", "")) > 200 else analysis.get("insights", "")
+                insights_value = analysis.get("insights", "")
+                insights_str = str(insights_value) if not isinstance(insights_value, str) else insights_value
+                formatted["summary"] = insights_str[:200] + "..." if len(insights_str) > 200 else insights_str
         
         elif "writing_result" in result_data:
             writing = result_data["writing_result"]
@@ -342,17 +490,39 @@ def format_task_result(result: Dict[str, Any]) -> Dict[str, Any]:
             formatted["original_question"] = writing.get("original_question")  # 原始问题
             formatted["answer_to_original_question"] = writing.get("answer_to_original_question")  # 直接回答原始问题
             formatted["output"] = writing.get("output")
-            formatted["key_points"] = writing.get("key_points", [])
-            formatted["style"] = writing.get("style", "")
-            formatted["word_count"] = writing.get("word_count")
-            formatted["readability_score"] = writing.get("readability_score")
-            formatted["steps"] = writing.get("steps", [])
-            formatted["step_count"] = len(writing.get("steps", []))
+            key_points = writing.get("key_points")
+            if key_points is not None:
+                formatted["key_points"] = key_points
+            style = writing.get("style")
+            if style is not None:
+                formatted["style"] = style
+            word_count = writing.get("word_count")
+            if word_count is not None:
+                formatted["word_count"] = word_count
+            readability_score = writing.get("readability_score")
+            if readability_score is not None:
+                formatted["readability_score"] = readability_score
+            steps = writing.get("steps")
+            if steps is not None:
+                formatted["steps"] = steps
+                if isinstance(steps, list):
+                    formatted["step_count"] = len(steps)
+                elif isinstance(steps, int):
+                    formatted["step_count"] = steps
+                else:
+                    formatted["step_count"] = 0
             # 优先使用answer_to_original_question作为摘要
             if writing.get("answer_to_original_question"):
-                formatted["summary"] = writing["answer_to_original_question"][:200] + "..." if len(writing["answer_to_original_question"]) > 200 else writing["answer_to_original_question"]
+                answer_value = writing["answer_to_original_question"]
+                answer_str = str(answer_value) if not isinstance(answer_value, str) else answer_value
+                formatted["summary"] = answer_str[:200] + "..." if len(answer_str) > 200 else answer_str
             elif not formatted["summary"]:
-                formatted["summary"] = writing.get("output", "")[:200] + "..." if len(writing.get("output", "")) > 200 else writing.get("output", "")
+                output_value = writing.get("output", "")
+                output_str = str(output_value) if not isinstance(output_value, str) else output_value
+                formatted["summary"] = output_str[:200] + "..." if len(output_str) > 200 else output_str
+    else:
+        # result_data不是字典的情况
+        formatted["summary"] = str(result_data)
     
     # 处理错误情况
     if "error" in result:
@@ -376,81 +546,94 @@ async def list_tasks():
         
         tasks_list = []
         for dag in dags:
-            task_info = {
-                "dag_id": dag.id,
-                "name": dag.name,
-                "description": dag.description,
-                "total_tasks": len(dag.tasks),
-                "created_at": dag.created_at.isoformat(),
-                "is_completed": dag.is_completed(),
-                "completed_at": None
-            }
-            
-            # 添加任务摘要信息
-            if dag.tasks:
-                completed_tasks = [t for t in dag.tasks.values() if t.status == TaskStatus.COMPLETED]
-                failed_tasks = [t for t in dag.tasks.values() if t.status == TaskStatus.FAILED]
+            try:
+                task_info = {
+                    "dag_id": dag.id,
+                    "name": dag.name,
+                    "description": str(dag.description) if dag.description is not None else "",
+                    "total_tasks": len(dag.tasks),
+                    "created_at": dag.created_at.isoformat(),
+                    "is_completed": dag.is_completed(),
+                    "completed_at": None
+                }
                 
-                task_info["completed_count"] = len(completed_tasks)
-                task_info["failed_count"] = len(failed_tasks)
-                pending_tasks = [t for t in dag.tasks.values() if t.status == TaskStatus.PENDING]
-                task_info["pending_count"] = len(pending_tasks)
-                
-                # 添加最新的任务结果摘要
-                if completed_tasks:
-                    latest_task = max(completed_tasks, key=lambda t: t.completed_at or t.created_at)
-                    if latest_task.result:
-                        formatted_result = format_task_result(latest_task.result)
-                        task_info["latest_result"] = formatted_result
-                        
-                        # 添加最终回答字段，更清晰地展示
-                        if formatted_result.get("answer_to_original_question"):
-                            task_info["final_answer"] = {
-                                "question": formatted_result.get("original_question", ""),
-                                "answer": formatted_result.get("answer_to_original_question", ""),
-                                "summary": formatted_result.get("summary", ""),
-                                "method": formatted_result.get("method", "")
-                            }
-                
-                # 添加所有完成的任务结果
-                if completed_tasks:
-                    task_info["completed_results"] = []
-                    for task in completed_tasks:
-                        if task.result:
-                            formatted_result = format_task_result(task.result)
-                            task_info["completed_results"].append({
-                                "task_id": task.id,
-                                "task_name": task.name,
-                                "result": formatted_result,
-                                # 添加最终回答字段
-                                "final_answer": formatted_result.get("answer_to_original_question", "") if formatted_result.get("answer_to_original_question") else None
-                            })
+                # 添加任务摘要信息
+                if dag.tasks:
+                    completed_tasks = [t for t in dag.tasks.values() if t.status == TaskStatus.COMPLETED]
+                    failed_tasks = [t for t in dag.tasks.values() if t.status == TaskStatus.FAILED]
                     
-                    # 添加综合最终回答（整合所有子任务的回答）
-                    if task_info["completed_results"]:
-                        all_answers = [
-                            result["final_answer"] or result["result"].get("answer_to_original_question", "")
-                            for result in task_info["completed_results"]
-                            if result["final_answer"] or result["result"].get("answer_to_original_question")
-                        ]
+                    task_info["completed_count"] = len(completed_tasks)
+                    task_info["failed_count"] = len(failed_tasks)
+                    pending_tasks = [t for t in dag.tasks.values() if t.status == TaskStatus.PENDING]
+                    task_info["pending_count"] = len(pending_tasks)
+                    
+                    # 添加最新的任务结果摘要
+                    if completed_tasks:
+                        latest_task = max(completed_tasks, key=lambda t: t.completed_at or t.created_at)
+                        if latest_task.result:
+                            formatted_result = format_task_result(latest_task.result)
+                            task_info["latest_result"] = formatted_result
+                            
+                            # 添加最终回答字段，更清晰地展示
+                            if formatted_result.get("answer_to_original_question"):
+                                task_info["final_answer"] = {
+                                    "question": formatted_result.get("original_question", ""),
+                                    "answer": formatted_result.get("answer_to_original_question", ""),
+                                    "summary": formatted_result.get("summary", ""),
+                                    "method": formatted_result.get("method", "")
+                                }
+                    
+                    # 添加所有完成的任务结果
+                    if completed_tasks:
+                        task_info["completed_results"] = []
+                        for task in completed_tasks:
+                            if task.result:
+                                formatted_result = format_task_result(task.result)
+                                task_info["completed_results"].append({
+                                    "task_id": task.id,
+                                    "task_name": task.name,
+                                    "result": formatted_result,
+                                    # 添加最终回答字段
+                                    "final_answer": formatted_result.get("answer_to_original_question", "") if formatted_result.get("answer_to_original_question") else None
+                                })
                         
-                        if all_answers:
-                            # 合并所有回答
-                            combined_answer = " ".join(all_answers)
-                            task_info["combined_final_answer"] = {
-                                "question": task_info["completed_results"][0]["result"].get("original_question", ""),
-                                "answer": combined_answer,
-                                "summary": combined_answer[:200] + "..." if len(combined_answer) > 200 else combined_answer,
-                                "task_count": len(task_info["completed_results"])
-                            }
-            
-            tasks_list.append(task_info)
+                        # 添加综合最终回答（整合所有子任务的回答）
+                        if task_info["completed_results"]:
+                            all_answers = []
+                            for result in task_info["completed_results"]:
+                                answer = result["final_answer"] or result["result"].get("answer_to_original_question", "")
+                                if answer:
+                                    # 确保答案是字符串
+                                    answer_str = str(answer) if not isinstance(answer, str) else answer
+                                    all_answers.append(answer_str)
+                            
+                            if all_answers:
+                                # 合并所有回答
+                                combined_answer = " ".join(all_answers)
+                                first_result = task_info["completed_results"][0]["result"]
+                                original_question = first_result.get("original_question", "") if isinstance(first_result, dict) else ""
+                                task_info["combined_final_answer"] = {
+                                    "question": original_question,
+                                    "answer": combined_answer,
+                                    "summary": combined_answer[:200] + "..." if len(combined_answer) > 200 else combined_answer,
+                                    "task_count": len(task_info["completed_results"])
+                                }
+                
+                tasks_list.append(task_info)
+            except Exception as e:
+                print(f"处理DAG {dag.id} 时出错: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
         
         return {
             "total_count": len(dags),
             "tasks": tasks_list
         }
     except Exception as e:
+        print(f"获取任务列表时出错: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -568,7 +751,9 @@ async def get_events(limit: int = 100, session_id: Optional[str] = None, grouped
                 for event in session_event_list:
                     event_data = event.get('data', {})
                     if event.get('type') == 'TASK_CREATED' and event_data.get('description'):
-                        session_name = event_data['description'][:30]
+                        description = event_data['description']
+                        description_str = str(description) if not isinstance(description, str) else description
+                        session_name = description_str[:30]
                         break
                 
                 grouped_events.append({
@@ -699,7 +884,7 @@ async def get_session_tasks(session_id: str):
             task_info = {
                 "dag_id": dag.id,
                 "name": dag.name,
-                "description": dag.description,
+                "description": str(dag.description) if dag.description is not None else "",
                 "total_tasks": len(dag.tasks),
                 "created_at": dag.created_at.isoformat() if dag.created_at else None,
                 "is_completed": dag.is_completed(),
@@ -748,17 +933,21 @@ async def get_session_tasks(session_id: str):
                     
                     # 添加综合最终回答（整合所有子任务的回答）
                     if task_info["completed_results"]:
-                        all_answers = [
-                            result["final_answer"] or result["result"].get("answer_to_original_question", "")
-                            for result in task_info["completed_results"]
-                            if result["final_answer"] or result["result"].get("answer_to_original_question")
-                        ]
+                        all_answers = []
+                        for result in task_info["completed_results"]:
+                            answer = result["final_answer"] or result["result"].get("answer_to_original_question", "")
+                            if answer:
+                                # 确保答案是字符串
+                                answer_str = str(answer) if not isinstance(answer, str) else answer
+                                all_answers.append(answer_str)
                         
                         if all_answers:
                             # 合并所有回答
                             combined_answer = " ".join(all_answers)
+                            first_result = task_info["completed_results"][0]["result"]
+                            original_question = first_result.get("original_question", "") if isinstance(first_result, dict) else ""
                             task_info["combined_final_answer"] = {
-                                "question": task_info["completed_results"][0]["result"].get("original_question", ""),
+                                "question": original_question,
                                 "answer": combined_answer,
                                 "summary": combined_answer[:200] + "..." if len(combined_answer) > 200 else combined_answer,
                                 "task_count": len(task_info["completed_results"])
@@ -770,6 +959,37 @@ async def get_session_tasks(session_id: str):
             "session_id": session_id,
             "total_tasks": len(tasks_list),
             "tasks": tasks_list
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tasks/react/{task_id}")
+async def get_react_task_result(task_id: str):
+    """
+    获取ReAct任务的结果
+    
+    Args:
+        task_id: ReAct任务ID
+        
+    Returns:
+        ReAct任务结果
+    """
+    try:
+        blackboard = app.state.blackboard
+        
+        # 从黑板获取ReAct任务结果
+        result_key = f"react_result_{task_id}"
+        result = blackboard.get_knowledge(result_key)
+        
+        if result:
+            return result
+        
+        # 如果没有找到结果，返回空结果
+        return {
+            "task_id": task_id,
+            "status": "not_found",
+            "message": "ReAct task result not found"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -994,6 +1214,281 @@ async def health_check():
         "status": "healthy",
         "version": "2.0.0"
     }
+
+
+@app.get("/api/agent-interaction-graph/{dag_id}")
+async def get_agent_interaction_graph(dag_id: str):
+    """
+    获取Agent交互图
+    
+    Args:
+        dag_id: DAG ID
+        
+    Returns:
+        Agent交互图数据
+    """
+    try:
+        blackboard = app.state.blackboard
+        scheduler = app.state.scheduler
+        dynamic_agent_manager = app.state.dynamic_agent_manager
+        
+        # 获取DAG信息
+        dag = scheduler.get_dag(dag_id)
+        if not dag:
+            raise HTTPException(status_code=404, detail=f"DAG {dag_id} not found")
+        
+        # 构建节点和边
+        nodes = []
+        edges = []
+        
+        # 添加主Agent节点
+        main_agent = app.state.main_agent
+        nodes.append({
+            "id": "main_agent",
+            "name": "Main Agent (Planner)",
+            "role": "planner",
+            "type": "main",
+            "status": "active",
+            "position": {"x": 400, "y": 50}
+        })
+        
+        # 获取所有子任务
+        tasks = list(dag.tasks.values())
+        
+        # 按agent角色分组任务
+        agent_tasks = {}
+        for task in tasks:
+            agent_role = task.agent_role or "unknown"
+            if agent_role not in agent_tasks:
+                agent_tasks[agent_role] = []
+            agent_tasks[agent_role].append(task)
+        
+        # 为每个agent创建节点
+        y_position = 150
+        x_position = 100
+        agent_positions = {}
+        
+        for agent_role, role_tasks in agent_tasks.items():
+            # 获取该角色的agent实例
+            agents = dynamic_agent_manager.get_agents_by_role(agent_role) if dynamic_agent_manager else []
+            agent = agents[0] if agents else None
+            
+            agent_id = agent.agent_id if agent else f"{agent_role}_1"
+            agent_status = agent.agent.status if agent and hasattr(agent, 'agent') else "unknown"
+            
+            # 添加agent节点
+            nodes.append({
+                "id": agent_id,
+                "name": agent_id,
+                "role": agent_role,
+                "type": "sub",
+                "status": agent_status,
+                "position": {"x": x_position, "y": y_position},
+                "task_count": len(role_tasks)
+            })
+            
+            agent_positions[agent_role] = agent_id
+            x_position += 200
+            
+            # 如果x_position超过800，换行
+            if x_position > 800:
+                x_position = 100
+                y_position += 150
+        
+        # 添加任务节点和边
+        task_positions = {}
+        for i, task in enumerate(tasks):
+            agent_role = task.agent_role or "unknown"
+            agent_id = agent_positions.get(agent_role, "unknown")
+            
+            # 任务节点位置（在agent节点下方）
+            task_x = nodes[nodes.index(next(n for n in nodes if n["id"] == agent_id))]["position"]["x"]
+            task_y = nodes[nodes.index(next(n for n in nodes if n["id"] == agent_id))]["position"]["y"] + 100 + (i % 3) * 60
+            
+            nodes.append({
+                "id": task.id,
+                "name": task.name,
+                "description": task.description,
+                "type": "task",
+                "status": task.status.value if task.status else "pending",
+                "agent_role": agent_role,
+                "priority": task.priority.value if task.priority else 2,
+                "position": {"x": task_x, "y": task_y}
+            })
+            
+            task_positions[i] = task.id
+            
+            # 添加agent到任务的边
+            edges.append({
+                "from": agent_id,
+                "to": task.id,
+                "type": "assignment",
+                "label": "执行"
+            })
+        
+        # 添加任务依赖关系的边
+        for i, task in enumerate(tasks):
+            if hasattr(task, 'dependencies') and task.dependencies:
+                for dep_idx in task.dependencies:
+                    if dep_idx in task_positions:
+                        edges.append({
+                            "from": task_positions[dep_idx],
+                            "to": task.id,
+                            "type": "dependency",
+                            "label": "依赖"
+                        })
+        
+        # 添加主Agent到第一个任务的边
+        if tasks:
+            first_task = tasks[0]
+            first_task_agent_role = first_task.agent_role or "unknown"
+            first_task_agent_id = agent_positions.get(first_task_agent_role, "unknown")
+            
+            edges.append({
+                "from": "main_agent",
+                "to": first_task_agent_id,
+                "type": "assignment",
+                "label": "分配"
+            })
+        
+        return {
+            "dag_id": dag_id,
+            "dag_name": dag.name,
+            "dag_description": dag.description,
+            "nodes": nodes,
+            "edges": edges,
+            "statistics": {
+                "total_agents": len(agent_positions),
+                "total_tasks": len(tasks),
+                "completed_tasks": sum(1 for t in tasks if t.status == TaskStatus.COMPLETED),
+                "failed_tasks": sum(1 for t in tasks if t.status == TaskStatus.FAILED),
+                "pending_tasks": sum(1 for t in tasks if t.status == TaskStatus.PENDING)
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/agent-details/{agent_id}")
+async def get_agent_details(agent_id: str):
+    """
+    获取Agent详细信息，包括工具调用和最终结果
+    
+    Args:
+        agent_id: Agent ID
+        
+    Returns:
+        Agent详细信息
+    """
+    try:
+        dynamic_agent_manager = app.state.dynamic_agent_manager
+        blackboard = app.state.blackboard
+        
+        # 获取agent实例
+        agent = dynamic_agent_manager.get_agent_by_id(agent_id) if dynamic_agent_manager else None
+        if not agent:
+            # 尝试从黑板获取
+            all_agents = blackboard.get_all_agents()
+            agent = next((a for a in all_agents if (a.id if hasattr(a, 'id') else a.agent_id) == agent_id), None)
+            
+        if not agent:
+            raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+        
+        # 获取agent的ID（兼容不同的agent对象）
+        agent_id_value = agent.id if hasattr(agent, 'id') else agent.agent_id
+        agent_name = agent.name if hasattr(agent, 'name') else agent.agent_id
+        agent_role = agent.role if hasattr(agent, 'role') else agent.agent_role
+        agent_status = agent.status if hasattr(agent, 'status') else 'unknown'
+        
+        # 获取agent的工作记忆
+        working_memory = []
+        if hasattr(agent, 'context_manager'):
+            context = agent.context_manager._context
+            working_memory = context.get('working_memory', [])
+        
+        # 获取agent的任务历史
+        task_history = []
+        if hasattr(agent, 'task_history'):
+            task_history = agent.task_history
+        
+        # 获取agent的当前任务
+        current_task = None
+        if hasattr(agent, 'current_task_id') and agent.current_task_id:
+            current_task = blackboard.get_task(agent.current_task_id)
+        
+        # 获取agent的统计信息
+        stats = {
+            "total_tasks_executed": len(task_history),
+            "successful_tasks": sum(1 for t in task_history if t.get('status') == 'completed'),
+            "failed_tasks": sum(1 for t in task_history if t.get('status') == 'failed'),
+            "total_tool_calls": sum(len(wm.get('content', '').split('调用工具')) - 1 for wm in working_memory if '调用工具' in wm.get('content', ''))
+        }
+        
+        return {
+            "agent_id": agent_id_value,
+            "name": agent_name,
+            "role": agent_role,
+            "status": agent_status,
+            "capabilities": agent.capabilities if hasattr(agent, 'capabilities') else [],
+            "current_task": {
+                "id": current_task.id if current_task else None,
+                "name": current_task.name if current_task else None,
+                "description": current_task.description if current_task else None,
+                "status": current_task.status.value if current_task and current_task.status else None
+            } if current_task else None,
+            "working_memory": working_memory,
+            "task_history": task_history,
+            "statistics": stats
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/task-details/{task_id}")
+async def get_task_details(task_id: str):
+    """
+    获取任务详细信息，包括工具调用和结果
+    
+    Args:
+        task_id: 任务ID
+        
+    Returns:
+        任务详细信息
+    """
+    try:
+        blackboard = app.state.blackboard
+        scheduler = app.state.scheduler
+        
+        # 获取任务
+        task = blackboard.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        
+        # 获取任务结果
+        result = blackboard.get_task_result(task_id)
+        
+        # 获取任务的DAG信息
+        dag_id = None
+        for dag in scheduler.get_all_dags():
+            if task_id in [t.id for t in dag.tasks]:
+                dag_id = dag.id
+                break
+        
+        return {
+            "task_id": task.id,
+            "name": task.name,
+            "description": task.description,
+            "status": task.status.value if task.status else "pending",
+            "priority": task.priority.value if task.priority else 2,
+            "agent_role": task.agent_role,
+            "agent_id": task.agent_id,
+            "dag_id": dag_id,
+            "result": result,
+            "created_at": task.created_at.isoformat() if task.created_at else None,
+            "updated_at": task.updated_at.isoformat() if task.updated_at else None
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def create_app(
